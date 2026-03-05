@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="UTF-8">
+  <title>FC Test Host</title>
+  <style>
+    body {
+      font-family: monospace;
+      padding: 20px;
+      background: #1a1a2e;
+      color: #eee;
+    }
+
+    #status {
+      font-size: 24px;
+      font-weight: bold;
+      margin: 20px 0;
+    }
+
+    #status.ready {
+      color: #00ff88;
+    }
+
+    #status.waiting {
+      color: #ffaa00;
+    }
+
+    #status.error {
+      color: #ff4444;
+    }
+
+    #event-log {
+      background: #0d0d1a;
+      padding: 10px;
+      height: 200px;
+      overflow-y: auto;
+      font-size: 12px;
+      margin-top: 20px;
+    }
+
+    #miniapp-frame {
+      width: 424px;
+      height: 695px;
+      border: 2px solid #333;
+      display: block;
+      margin-top: 20px;
+      background: white;
+    }
+  </style>
+</head>
+
+<body>
+  <h2>FC Test Host</h2>
+  <div>Status: <span id="status" class="waiting">WAITING</span></div>
+  <div id="event-log"></div>
+  <iframe id="miniapp-frame" src="about:blank"></iframe>
+
+  <script>
+    const params = new URLSearchParams(window.location.search)
+    const appUrl = params.get('url') || 'http://localhost:3000'
+    const fixtureName = params.get('fixture') || 'launcher'
+
+    const statusEl = document.getElementById('status')
+    const logEl = document.getElementById('event-log')
+    const frame = document.getElementById('miniapp-frame')
+
+    // Load fixture from query param name
+    const fixtures = {
+      launcher: {
+        user: {
+          fid: 12345, username: 'testuser', displayName: 'Test User',
+          pfpUrl: 'https://i.imgur.com/placeholder.png'
+        },
+        client: {
+          clientFid: 9152, added: false, platformType: 'web',
+          safeAreaInsets: { top: 0, bottom: 0, left: 0, right: 0 }
+        },
+        location: { type: 'launcher' }
+      },
+      cast_embed: {
+        user: {
+          fid: 12345, username: 'testuser', displayName: 'Test User',
+          pfpUrl: 'https://i.imgur.com/placeholder.png'
+        },
+        client: {
+          clientFid: 9152, added: false, platformType: 'mobile',
+          safeAreaInsets: { top: 44, bottom: 34, left: 0, right: 0 }
+        },
+        location: {
+          type: 'cast_embed',
+          cast: {
+            hash: '0xabc123', author: { fid: 99, username: 'caster' },
+            text: 'Check out this app!'
+          }
+        }
+      },
+      notification: {
+        user: {
+          fid: 12345, username: 'testuser', displayName: 'Test User',
+          pfpUrl: 'https://i.imgur.com/placeholder.png'
+        },
+        client: {
+          clientFid: 9152, added: true, platformType: 'mobile',
+          safeAreaInsets: { top: 44, bottom: 34, left: 0, right: 0 },
+          notificationDetails: {
+            url: 'https://api.farcaster.xyz/v1/frame-notifications',
+            token: 'test-token-abc123'
+          }
+        },
+        location: {
+          type: 'notification',
+          notification: {
+            notificationId: 'notif-1', title: 'Your turn!',
+            body: 'Come back and play'
+          }
+        }
+      }
+    }
+
+    const context = fixtures[fixtureName] || fixtures.launcher
+
+    function log(msg) {
+      const line = document.createElement('div')
+      line.textContent = `${new Date().toISOString().slice(11, 23)} ${msg}`
+      logEl.appendChild(line)
+      logEl.scrollTop = logEl.scrollHeight
+      console.log(msg)
+    }
+
+    // Handle messages from the Mini App iframe
+    window.addEventListener('message', (event) => {
+      if (event.source !== frame.contentWindow) return
+      const { type, data } = event.data || {}
+      log(`← APP: ${type} ${data ? JSON.stringify(data) : ''}`)
+
+      switch (type) {
+        case 'getContext':
+          frame.contentWindow.postMessage({ type: 'context', data: context }, '*')
+          log(`→ HOST: context (${fixtureName})`)
+          break
+
+        case 'ready':
+          statusEl.textContent = 'READY'
+          statusEl.className = 'ready'
+          log('→ HOST: app is ready')
+          break
+
+        case 'addMiniApp':
+          frame.contentWindow.postMessage(
+            { type: 'addMiniAppResult', data: { added: true } }, '*'
+          )
+          log('→ HOST: addMiniApp approved')
+          break
+
+        case 'openUrl':
+          log(`→ HOST: openUrl requested: ${data?.url}`)
+          break
+
+        case 'close':
+          log('→ HOST: close requested')
+          break
+
+        case 'signIn':
+          frame.contentWindow.postMessage({
+            type: 'signInResult',
+            data: {
+              message: 'mock-siwf-message',
+              signature: '0xmocksignature123'
+            }
+          }, '*')
+          log('→ HOST: signIn mock response sent')
+          break
+
+        default:
+          log(`← APP: unknown message type: ${type}`)
+      }
+    })
+
+    // Load the Mini App into the iframe
+    log(`Loading app: ${appUrl}`)
+    frame.src = appUrl
+
+    frame.addEventListener('load', () => {
+      log('iframe loaded')
+    })
+  </script>
+</body>
+
+</html>
