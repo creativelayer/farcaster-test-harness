@@ -40,7 +40,7 @@
     }
 
     #miniapp-frame {
-      width: 424px;
+      width: 393px;
       height: 695px;
       border: 2px solid #333;
       display: block;
@@ -69,14 +69,19 @@
     const fixtures = {
       launcher: {
         user: {
-          fid: 12345, username: 'testuser', displayName: 'Test User',
-          pfpUrl: 'https://i.imgur.com/placeholder.png'
+          fid: 3621,
+          username: 'testuser',
+          displayName: 'Test User',
+          pfpUrl: 'https://example.com/pfp.png',
         },
         client: {
-          clientFid: 9152, added: false, platformType: 'web',
-          safeAreaInsets: { top: 0, bottom: 0, left: 0, right: 0 }
+          clientFid: 9152,
+          added: false,
+          safeAreaInsets: { top: 0, bottom: 0, left: 0, right: 0 },
         },
-        location: { type: 'launcher' }
+        location: {
+          type: 'launcher',
+        },
       },
       cast_embed: {
         user: {
@@ -131,50 +136,51 @@
     // Handle messages from the Mini App iframe
     window.addEventListener('message', (event) => {
       if (event.source !== frame.contentWindow) return
-      const { type, data } = event.data || {}
-      log(`← APP: ${type} ${data ? JSON.stringify(data) : ''}`)
+      console.log('RAW MESSAGE:', JSON.stringify(event.data))
 
-      switch (type) {
-        case 'getContext':
-          frame.contentWindow.postMessage({ type: 'context', data: context }, '*')
-          log(`→ HOST: context (${fixtureName})`)
-          break
+      const { id, type, path, argumentList } = event.data || {}
+      const pathKey = (path || []).join('.')
 
-        case 'ready':
+      if (pathKey === 'context') {
+        log(`← APP: GET context`)
+        console.log('SENDING CONTEXT:', JSON.stringify(context))
+        frame.contentWindow.postMessage({ id, type: 'RAW', value: context }, '*')
+        log(`→ HOST: context response (id: ${id?.slice(0, 8)})`)
+        return
+      }
+
+      if (type === 'APPLY') {
+        log(`← APP: APPLY ${pathKey}`)
+
+        if (pathKey === 'ready') {
+          frame.contentWindow.postMessage({ id, type: 'RAW', value: null }, '*')
           statusEl.textContent = 'READY'
           statusEl.className = 'ready'
-          log('→ HOST: app is ready')
-          break
+          log('→ HOST: ready acknowledged')
+          return
+        }
 
-        case 'addMiniApp':
-          frame.contentWindow.postMessage(
-            { type: 'addMiniAppResult', data: { added: true } }, '*'
-          )
+        if (pathKey === 'addMiniApp') {
+          frame.contentWindow.postMessage({ id, type: 'RAW', value: { added: true } }, '*')
           log('→ HOST: addMiniApp approved')
-          break
+          return
+        }
 
-        case 'openUrl':
-          log(`→ HOST: openUrl requested: ${data?.url}`)
-          break
-
-        case 'close':
-          log('→ HOST: close requested')
-          break
-
-        case 'signIn':
+        if (pathKey === 'signIn') {
           frame.contentWindow.postMessage({
-            type: 'signInResult',
-            data: {
-              message: 'mock-siwf-message',
-              signature: '0xmocksignature123'
-            }
+            id, type: 'RAW',
+            value: { message: 'mock-siwf-message', signature: '0xmocksignature123' }
           }, '*')
-          log('→ HOST: signIn mock response sent')
-          break
+          log('→ HOST: signIn mock')
+          return
+        }
 
-        default:
-          log(`← APP: unknown message type: ${type}`)
+        frame.contentWindow.postMessage({ id, type: 'RAW', value: null }, '*')
+        log(`→ HOST: APPLY ${pathKey} acknowledged`)
+        return
       }
+
+      log(`← APP: unhandled ${JSON.stringify(event.data).slice(0, 80)}`)
     })
 
     // Load the Mini App into the iframe

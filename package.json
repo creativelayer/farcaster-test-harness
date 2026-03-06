@@ -1,14 +1,14 @@
 {
-  "name": "fc-test-host",
+  "name": "farcaster-test-harness",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Farcaster Mini App test harness — loads mini apps in an iframe and speaks the SDK's comlink postMessage protocol for Playwright testing",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "playwright test",
+    "serve": "serve . -p 4000"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": ["farcaster", "miniapp", "testing", "playwright"],
+  "author": "Creative Layer Inc",
+  "license": "MIT",
   "packageManager": "pnpm@10.30.3",
   "devDependencies": {
     "@playwright/test": "^1.58.2",
