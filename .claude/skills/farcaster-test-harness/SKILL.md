@@ -14,26 +14,29 @@ https://github.com/creativelayer/farcaster-test-harness
 
 ## Quick Setup
 
-In any Mini App project, clone the harness as a sibling directory:
+Install the harness as a dev dependency of your Mini App project:
 
 ```bash
-cd ~/projects
-git clone https://github.com/creativelayer/farcaster-test-harness
-cd farcaster-test-harness
-pnpm install
+# From GitHub (recommended for now)
+pnpm add -D github:creativelayer/farcaster-test-harness
+
+# Or npm link for local development
+cd ~/projects/farcaster-test-harness && npm link
+cd ~/projects/my-miniapp && pnpm link farcaster-test-harness
+```
+
+The package provides a `farcaster-test-harness-serve` bin script that serves `host.html` using the bundled `serve` v14 (with clean URLs enabled):
+
+```bash
+npx farcaster-test-harness-serve 4000
+```
+
+Install Playwright and run your app's e2e tests:
+
+```bash
+pnpm add -D @playwright/test playwright
 npx playwright install chromium
-```
-
-Serve the host emulator on port 4000:
-
-```bash
-pnpm serve
-```
-
-Run tests pointing at your app on port 3000:
-
-```bash
-pnpm test
+pnpm test:e2e
 ```
 
 ---
@@ -564,10 +567,10 @@ export default function Home() {
 When building Mini Apps with Ralph, include these stories:
 
 **US-xxx — FC Host Emulator Setup:**
-> Clone `https://github.com/creativelayer/farcaster-test-harness` into a `farcaster-test-harness/` subdirectory of the app. Install its dependencies with `cd farcaster-test-harness && pnpm install`. Do not reimplement the host — use the repo as-is.
+> Install `farcaster-test-harness` as a dev dependency: `pnpm add -D github:creativelayer/farcaster-test-harness`. Do not reimplement the host — use the package as-is.
 
 **US-xxx — App Playwright Setup:**
-> Add `@playwright/test` and `playwright` as devDependencies to the app. Create `playwright.config.ts` at app root with `testDir: './e2e'` and two webServers: harness on port 4000 (`npx serve farcaster-test-harness -p 4000`) and the app on port 3000 (`pnpm dev`). Add script `"test:e2e": "playwright test"` to package.json. App-specific integration tests live in the app's `e2e/` directory, NOT inside the harness.
+> Add `@playwright/test` and `playwright` as devDependencies to the app. Create `playwright.config.ts` at app root with `testDir: './e2e'` and two webServers: harness on port 4000 (`npx farcaster-test-harness-serve 4000`) and the app on port 3000 (`pnpm dev`). Add script `"test:e2e": "playwright test"` to package.json. App-specific integration tests live in the app's `e2e/` directory, NOT inside the harness.
 
 **US-xxx — Playwright Integration Test:**
 > Write a Playwright test in the app's `e2e/` directory. Load `http://localhost:4000/host?url=http://localhost:3000&fixture=launcher`. Assert `#status` becomes `READY`. Assert `[data-testid="fid-display"]` in the app iframe shows `fid:3621`. Run from the app root with `pnpm test:e2e`.
