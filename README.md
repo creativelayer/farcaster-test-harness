@@ -72,15 +72,29 @@ npx playwright test --headed
 
 This repo includes a [Claude Code](https://claude.ai/claude-code) skill that teaches an agent how to use the test harness — the comlink wire protocol, fixture schemas, Playwright test patterns, and Ralph PRD integration.
 
-### Install the skill into your mini app project
+### Enable the skill
 
-From your mini app project directory:
+Add this repo as an additional working directory in your Claude Code project settings. The skill at `.claude/skills/farcaster-test-harness/SKILL.md` will be automatically discovered.
 
-```bash
-bash ../farcaster-test-harness/install-skill.sh
+In VS Code, add to your workspace settings (`.vscode/settings.json`):
+
+```json
+{
+  "claude-code.additionalWorkingDirectories": [
+    "/path/to/farcaster-test-harness"
+  ]
+}
 ```
 
-This copies `SKILL.md` into your project's `.claude/skills/farcaster-test-harness/` directory. Once installed, Claude Code will automatically use the skill when working on Farcaster Mini App testing tasks.
+Or in `~/.claude/settings.json` to make it available globally:
+
+```json
+{
+  "additionalWorkingDirectories": [
+    "/path/to/farcaster-test-harness"
+  ]
+}
+```
 
 ### What the skill provides
 
@@ -93,11 +107,10 @@ This copies `SKILL.md` into your project's `.claude/skills/farcaster-test-harnes
 ## Project structure
 
 ```
-host.html              # Host emulator page
-tests/host.spec.ts     # Playwright tests
-playwright.config.ts   # Playwright configuration
-SKILL.md               # Claude Code skill (install into your project)
-install-skill.sh       # Skill installer script
+host.html                                      # Host emulator page
+tests/host.spec.ts                             # Playwright tests
+playwright.config.ts                           # Playwright configuration
+.claude/skills/farcaster-test-harness/SKILL.md # Claude Code skill
 ```
 
 ## License
