@@ -78,19 +78,6 @@ test('host emulator switches fixture via query param', async ({ page }) => {
   await expect(page.locator('#status')).toHaveText('READY', { timeout: 5000 })
 })
 
-test('real mini app receives FC context and calls ready', async ({ page }) => {
-  page.on('console', msg => console.log('HOST CONSOLE:', msg.text()))
-
-  await page.goto('http://localhost:4000/host?url=http://localhost:3000&fixture=launcher')
-  await page.waitForTimeout(5000)
-
-  await expect(page.locator('#status')).toHaveText('READY', { timeout: 10000 })
-
-  // Assert FID is displayed inside the iframe
-  const appFrame = page.frameLocator('iframe#miniapp-frame')
-  await expect(appFrame.locator('[data-testid="fid-display"]')).toHaveText('fid:3621', { timeout: 5000 })
-})
-
 // ── SWIF (Sign In With Farcaster) Tests ────────────────────────────────
 
 test('signIn returns proper SIWE message with result wrapper', async ({ page }) => {

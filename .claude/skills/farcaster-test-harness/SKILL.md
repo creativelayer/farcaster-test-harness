@@ -564,16 +564,19 @@ export default function Home() {
 When building Mini Apps with Ralph, include these stories:
 
 **US-xxx — FC Host Emulator Setup:**
-> Clone `https://github.com/creativelayer/farcaster-test-harness` as a sibling directory to the app. Install dependencies with `pnpm install`. The harness serves on port 4000 via `pnpm serve`. Do not reimplement the host — use the repo as-is.
+> Clone `https://github.com/creativelayer/farcaster-test-harness` into a `farcaster-test-harness/` subdirectory of the app. Install its dependencies with `cd farcaster-test-harness && pnpm install`. Do not reimplement the host — use the repo as-is.
+
+**US-xxx — App Playwright Setup:**
+> Add `@playwright/test` and `playwright` as devDependencies to the app. Create `playwright.config.ts` at app root with `testDir: './e2e'` and two webServers: harness on port 4000 (`npx serve farcaster-test-harness -p 4000`) and the app on port 3000 (`pnpm dev`). Add script `"test:e2e": "playwright test"` to package.json. App-specific integration tests live in the app's `e2e/` directory, NOT inside the harness.
 
 **US-xxx — Playwright Integration Test:**
-> Write a Playwright test in the harness `tests/` directory. Load `http://localhost:4000/host?url=http://localhost:3000&fixture=launcher`. Assert `#status` becomes `READY`. Assert `[data-testid="fid-display"]` in the app iframe shows `fid:3621`. Run from the harness directory with `pnpm test`.
+> Write a Playwright test in the app's `e2e/` directory. Load `http://localhost:4000/host?url=http://localhost:3000&fixture=launcher`. Assert `#status` becomes `READY`. Assert `[data-testid="fid-display"]` in the app iframe shows `fid:3621`. Run from the app root with `pnpm test:e2e`.
 
 **US-xxx — SWIF Authentication:**
-> Implement Sign In With Farcaster using `sdk.actions.signIn({ nonce })`. The test harness generates a valid SIWE message with the fixture's FID and returns a deterministic signature `0xmock_signature_<nonce>`. Write a Playwright test asserting the SIWE message contains the correct nonce and FID.
+> Implement Sign In With Farcaster using `sdk.actions.signIn({ nonce })`. The test harness generates a valid SIWE message with the fixture's FID and returns a deterministic signature `0xmock_signature_<nonce>`. Write a Playwright test in `e2e/` asserting the SIWE message contains the correct nonce and FID.
 
 **US-xxx — Wallet Integration:**
-> Use `sdk.wallet.ethProvider` for on-chain interactions. The test harness mocks `eth_requestAccounts`, `eth_chainId`, `personal_sign`, `eth_sendTransaction`, and `wallet_switchEthereumChain`. Write Playwright tests asserting mock address `0x1234567890abcdef1234567890abcdef12345678` and chain ID `0xa` (OP Mainnet). Use `?wallet=disconnected` to test rejection flows.
+> Use `sdk.wallet.ethProvider` for on-chain interactions. The test harness mocks `eth_requestAccounts`, `eth_chainId`, `personal_sign`, `eth_sendTransaction`, and `wallet_switchEthereumChain`. Write Playwright tests in `e2e/` asserting mock address `0x1234567890abcdef1234567890abcdef12345678` and chain ID `0xa` (OP Mainnet). Use `?wallet=disconnected` to test rejection flows.
 
 ---
 
