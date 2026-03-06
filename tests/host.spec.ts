@@ -401,3 +401,149 @@ test('chain query param configures initial chain', async ({ page }) => {
   const appFrame = page.frameLocator('#miniapp-frame')
   await expect(appFrame.locator('#result')).toHaveText('base-ok', { timeout: 5000 })
 })
+
+// ── Failure Simulation Tests ──────────────────────────────────────────
+
+test('signIn=rejected returns rejected_by_user error', async ({ page }) => {
+  await page.goto('http://localhost:4000/host?url=about:blank&fixture=launcher&signIn=rejected')
+
+  await injectApp(page, `
+    const signInId = 'test-signin-rej-' + Math.random().toString(16).slice(2)
+    window.parent.postMessage({
+      id: signInId,
+      type: 'APPLY',
+      path: ['signIn'],
+      argumentList: [{ type: 'RAW', value: { nonce: 'test-nonce-123' } }]
+    }, '*')
+    window.addEventListener('message', (e) => {
+      if (e.data.id === signInId && e.data.type === 'RAW') {
+        const v = e.data.value
+        if (v.error && v.error.type === 'rejected_by_user') {
+          document.getElementById('result').textContent = 'rejected-ok'
+        } else {
+          document.getElementById('result').textContent = 'unexpected:' + JSON.stringify(v)
+        }
+      }
+    })
+  `)
+
+  const appFrame = page.frameLocator('#miniapp-frame')
+  await expect(appFrame.locator('#result')).toHaveText('rejected-ok', { timeout: 5000 })
+})
+
+test('tx=rejected rejects eth_sendTransaction with 4001', async ({ page }) => {
+  await page.goto('http://localhost:4000/host?url=about:blank&fixture=launcher&tx=rejected')
+
+  await injectApp(page, `
+    const results = {}
+    let pending = 2
+
+    function checkDone() {
+      pending--
+      if (pending <= 0) {
+        document.getElementById('result').textContent = Object.entries(results).map(([k,v]) => k + ':' + v).join(',')
+      }
+    }
+
+    window.addEventListener('message', (e) => {
+      if (e.data.type !== 'RAW') return
+      if (e.data.id === accId) {
+        const rpc = e.data.value
+        if (rpc.result && rpc.result[0]) {
+          results.accounts = 'ok'
+        } else {
+          results.accounts = 'fail'
+        }
+        checkDone()
+      }
+      if (e.data.id === txId) {
+        const rpc = e.data.value
+        if (rpc.error && rpc.error.code === 4001) {
+          results.tx = 'rejected'
+        } else {
+          results.tx = 'unexpected'
+        }
+        checkDone()
+      }
+    })
+
+    // eth_requestAccounts should still succeed
+    const accId = 'test-acc-' + Math.random().toString(16).slice(2)
+    window.parent.postMessage({
+      id: accId,
+      type: 'APPLY',
+      path: ['ethProviderRequestV2'],
+      argumentList: [{ type: 'RAW', value: { jsonrpc: '2.0', id: 1, method: 'eth_requestAccounts', params: [] } }]
+    }, '*')
+
+    // eth_sendTransaction should be rejected
+    const txId = 'test-tx-' + Math.random().toString(16).slice(2)
+    window.parent.postMessage({
+      id: txId,
+      type: 'APPLY',
+      path: ['ethProviderRequestV2'],
+      argumentList: [{ type: 'RAW', value: {
+        jsonrpc: '2.0', id: 2,
+        method: 'eth_sendTransaction',
+        params: [{ to: '0x0000000000000000000000000000000000000001', value: '0x1' }]
+      }}]
+    }, '*')
+  `)
+
+  const appFrame = page.frameLocator('#miniapp-frame')
+  await expect(appFrame.locator('#result')).toHaveText('accounts:ok,tx:rejected', { timeout: 5000 })
+})
+
+test('capabilities=no-wallet omits wallet capability', async ({ page }) => {
+  await page.goto('http://localhost:4000/host?url=about:blank&fixture=launcher&capabilities=no-wallet')
+
+  await injectApp(page, `
+    const capsId = 'test-caps-nw-' + Math.random().toString(16).slice(2)
+    window.parent.postMessage({
+      id: capsId,
+      type: 'APPLY',
+      path: ['getCapabilities'],
+      argumentList: []
+    }, '*')
+    window.addEventListener('message', (e) => {
+      if (e.data.id === capsId && e.data.type === 'RAW') {
+        const caps = e.data.value
+        const parts = []
+        if (Array.isArray(caps)) parts.push('is-array')
+        if (!caps.includes('wallet.getEthereumProvider')) parts.push('no-wallet')
+        if (caps.includes('actions.signIn')) parts.push('has-signin')
+        if (caps.includes('actions.ready')) parts.push('has-ready')
+        document.getElementById('result').textContent = parts.join(',')
+      }
+    })
+  `)
+
+  const appFrame = page.frameLocator('#miniapp-frame')
+  await expect(appFrame.locator('#result')).toHaveText(
+    'is-array,no-wallet,has-signin,has-ready',
+    { timeout: 5000 }
+  )
+})
+
+test('delay adds response latency', async ({ page }) => {
+  await page.goto('http://localhost:4000/host?url=about:blank&fixture=launcher&delay=500')
+
+  await injectApp(page, `
+    const contextId = 'test-delay-' + Math.random().toString(16).slice(2)
+    const start = Date.now()
+    window.parent.postMessage({ id: contextId, type: 'GET', path: ['context'] }, '*')
+    window.addEventListener('message', (e) => {
+      if (e.data.id === contextId && e.data.type === 'RAW') {
+        const elapsed = Date.now() - start
+        if (elapsed >= 400) {
+          document.getElementById('result').textContent = 'delayed-ok'
+        } else {
+          document.getElementById('result').textContent = 'too-fast:' + elapsed + 'ms'
+        }
+      }
+    })
+  `)
+
+  const appFrame = page.frameLocator('#miniapp-frame')
+  await expect(appFrame.locator('#result')).toHaveText('delayed-ok', { timeout: 10000 })
+})

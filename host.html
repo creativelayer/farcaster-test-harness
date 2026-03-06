@@ -67,6 +67,10 @@
     const fixtureName = params.get('fixture') || 'launcher'
     const walletMode = params.get('wallet') || 'connected'
     const initialChainId = parseInt(params.get('chain') || '10', 10)
+    const signInMode = params.get('signIn') || 'success'
+    const txMode = params.get('tx') || 'success'
+    const responseDelay = parseInt(params.get('delay') || '0', 10)
+    const capabilitiesMode = params.get('capabilities') || 'full'
 
     const statusEl = document.getElementById('status')
     const walletStatusEl = document.getElementById('wallet-status')
@@ -186,6 +190,15 @@
       console.log(msg)
     }
 
+    // ── Delayed Response Helper ─────────────────────────────────────────
+    function respond(target, msg) {
+      if (responseDelay > 0) {
+        setTimeout(() => target.postMessage(msg, '*'), responseDelay)
+      } else {
+        target.postMessage(msg, '*')
+      }
+    }
+
     // ── SIWE Message Builder ───────────────────────────────────────────
     function buildSiweMessage(options) {
       const domain = new URL(appUrl).host
@@ -257,6 +270,9 @@
           if (!wallet.connected) {
             return { error: { code: 4100, message: 'Unauthorized' } }
           }
+          if (txMode === 'rejected') {
+            return { error: { code: 4001, message: 'User rejected the request' } }
+          }
           // Deterministic: use a fixed mock tx hash
           return { result: '0xmock_tx_' + '0'.repeat(54) + 'abcdef01' }
         }
@@ -311,7 +327,7 @@
       if (pathKey === 'context') {
         log(`← APP: GET context`)
         console.log('SENDING CONTEXT:', JSON.stringify(context))
-        frame.contentWindow.postMessage({ id, type: 'RAW', value: context }, '*')
+        respond(frame.contentWindow, { id, type: 'RAW', value: context })
         log(`→ HOST: context response (id: ${id?.slice(0, 8)})`)
         return
       }
@@ -321,7 +337,7 @@
 
         // ── ready ──
         if (pathKey === 'ready') {
-          frame.contentWindow.postMessage({ id, type: 'RAW', value: null }, '*')
+          respond(frame.contentWindow, { id, type: 'RAW', value: null })
           statusEl.textContent = 'READY'
           statusEl.className = 'ready'
           log('→ HOST: ready acknowledged')
@@ -330,19 +346,27 @@
 
         // ── addMiniApp / addFrame ──
         if (pathKey === 'addMiniApp' || pathKey === 'addFrame') {
-          frame.contentWindow.postMessage({
+          respond(frame.contentWindow, {
             id, type: 'RAW',
             value: { result: { added: true, notificationDetails: { url: 'https://api.farcaster.xyz/v1/frame-notifications', token: 'mock-notif-token' } } }
-          }, '*')
+          })
           log('→ HOST: addMiniApp approved')
           return
         }
 
         // ── signIn (SWIF) ──
         if (pathKey === 'signIn') {
+          if (signInMode === 'rejected') {
+            respond(frame.contentWindow, {
+              id, type: 'RAW',
+              value: { error: { type: 'rejected_by_user' } }
+            })
+            log('→ HOST: signIn REJECTED (signIn=rejected)')
+            return
+          }
           const options = (argumentList && argumentList[0]?.value) || {}
           const siweMessage = buildSiweMessage(options)
-          frame.contentWindow.postMessage({
+          respond(frame.contentWindow, {
             id, type: 'RAW',
             value: {
               result: {
@@ -351,21 +375,24 @@
                 authMethod: 'custody'
               }
             }
-          }, '*')
+          })
           log(`→ HOST: signIn SIWE (nonce: ${options.nonce || 'none'})`)
           return
         }
 
         // ── getCapabilities ──
         if (pathKey === 'getCapabilities') {
-          frame.contentWindow.postMessage({ id, type: 'RAW', value: capabilities }, '*')
-          log('→ HOST: getCapabilities')
+          const caps = capabilitiesMode === 'no-wallet'
+            ? capabilities.filter(c => c !== 'wallet.getEthereumProvider')
+            : capabilities
+          respond(frame.contentWindow, { id, type: 'RAW', value: caps })
+          log(`→ HOST: getCapabilities${capabilitiesMode === 'no-wallet' ? ' (no-wallet)' : ''}`)
           return
         }
 
         // ── getChains ──
         if (pathKey === 'getChains') {
-          frame.contentWindow.postMessage({ id, type: 'RAW', value: supportedChains }, '*')
+          respond(frame.contentWindow, { id, type: 'RAW', value: supportedChains })
           log('→ HOST: getChains')
           return
         }
@@ -380,7 +407,7 @@
           } else {
             rpcResponse.result = rpcResult.result
           }
-          frame.contentWindow.postMessage({ id, type: 'RAW', value: rpcResponse }, '*')
+          respond(frame.contentWindow, { id, type: 'RAW', value: rpcResponse })
           log(`→ HOST: ethRPC ${rpcRequest.method} → ${rpcResult.error ? 'error' : 'ok'}`)
           return
         }
@@ -391,9 +418,9 @@
           const rpcResult = handleEthRpc(rpcRequest)
           if (rpcResult.error) {
             // V1 doesn't have a standard error envelope; return null
-            frame.contentWindow.postMessage({ id, type: 'RAW', value: null }, '*')
+            respond(frame.contentWindow, { id, type: 'RAW', value: null })
           } else {
-            frame.contentWindow.postMessage({ id, type: 'RAW', value: rpcResult.result }, '*')
+            respond(frame.contentWindow, { id, type: 'RAW', value: rpcResult.result })
           }
           log(`→ HOST: ethRPC-v1 ${rpcRequest.method}`)
           return
@@ -402,7 +429,7 @@
         // ── eip6963RequestProvider ──
         if (pathKey === 'eip6963RequestProvider') {
           // Send the announce event to the iframe
-          frame.contentWindow.postMessage({
+          respond(frame.contentWindow, {
             type: 'frameEvent',
             event: {
               event: 'eip6963:announceProvider',
@@ -413,14 +440,14 @@
                 uuid: 'fc-test-host-wallet-001'
               }
             }
-          }, '*')
-          frame.contentWindow.postMessage({ id, type: 'RAW', value: undefined }, '*')
+          })
+          respond(frame.contentWindow, { id, type: 'RAW', value: undefined })
           log('→ HOST: eip6963 announce')
           return
         }
 
         // ── catch-all ──
-        frame.contentWindow.postMessage({ id, type: 'RAW', value: null }, '*')
+        respond(frame.contentWindow, { id, type: 'RAW', value: null })
         log(`→ HOST: APPLY ${pathKey} acknowledged`)
         return
       }

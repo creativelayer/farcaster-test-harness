@@ -49,6 +49,10 @@ pnpm test:e2e
 | `fixture` | `launcher`, `cast_embed`, `notification` | `launcher` | Context fixture to use |
 | `wallet` | `connected`, `disconnected` | `connected` | Mock wallet connection state |
 | `chain` | `10`, `8453`, `1`, etc. | `10` | Initial chain ID (OP Mainnet default) |
+| `signIn` | `success`, `rejected` | `success` | Controls signIn behavior |
+| `tx` | `success`, `rejected` | `success` | Controls eth_sendTransaction behavior |
+| `delay` | milliseconds (e.g. `2000`) | `0` | Adds delay before all responses |
+| `capabilities` | `full`, `no-wallet` | `full` | Controls getCapabilities response |
 
 ---
 
@@ -580,6 +584,61 @@ When building Mini Apps with Ralph, include these stories:
 
 **US-xxx — Wallet Integration:**
 > Use `sdk.wallet.ethProvider` for on-chain interactions. The test harness mocks `eth_requestAccounts`, `eth_chainId`, `personal_sign`, `eth_sendTransaction`, and `wallet_switchEthereumChain`. Write Playwright tests in `e2e/` asserting mock address `0x1234567890abcdef1234567890abcdef12345678` and chain ID `0xa` (OP Mainnet). Use `?wallet=disconnected` to test rejection flows.
+
+---
+
+## Failure Simulation
+
+The harness supports query params to simulate rejection and failure scenarios. These let miniapp developers test error handling paths without needing a real Farcaster client.
+
+### signIn Rejection (`?signIn=rejected`)
+
+Returns `{ error: { type: 'rejected_by_user' } }` instead of a SIWE message. This matches the SDK's `SignInJsonResult` error shape.
+
+```
+http://localhost:4000/host?url=http://localhost:3000&signIn=rejected
+```
+
+### Transaction Rejection (`?tx=rejected`)
+
+Makes `eth_sendTransaction` return error code 4001 ("User rejected the request"). Other wallet methods still work normally.
+
+```
+http://localhost:4000/host?url=http://localhost:3000&tx=rejected
+```
+
+### No Wallet (`?capabilities=no-wallet`)
+
+Returns capabilities without `wallet.getEthereumProvider`, causing `sdk.wallet.getEthereumProvider()` to return `undefined`. Other capabilities remain available.
+
+```
+http://localhost:4000/host?url=http://localhost:3000&capabilities=no-wallet
+```
+
+### Response Delay (`?delay=<ms>`)
+
+Adds a delay (in milliseconds) before all host responses. Useful for testing loading states and timeouts.
+
+```
+http://localhost:4000/host?url=http://localhost:3000&delay=2000
+```
+
+### Combining Failure Modes
+
+Params can be combined to simulate complex scenarios:
+
+```
+# Disconnected wallet + rejected signIn
+http://localhost:4000/host?url=http://localhost:3000&wallet=disconnected&signIn=rejected
+
+# No wallet capability + slow responses
+http://localhost:4000/host?url=http://localhost:3000&capabilities=no-wallet&delay=1000
+```
+
+### Ralph PRD Story Template
+
+**US-xxx — Failure Path Tests:**
+> Write Playwright tests using harness failure params (`?signIn=rejected`, `?wallet=disconnected`, `?tx=rejected`, `?capabilities=no-wallet`) to verify the app handles rejection and unavailability gracefully. Assert appropriate error UI appears for each scenario.
 
 ---
 
