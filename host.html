@@ -30,6 +30,10 @@
       color: #ff4444;
     }
 
+    #wallet-status {
+      color: #88aaff;
+    }
+
     #event-log {
       background: #0d0d1a;
       padding: 10px;
@@ -53,6 +57,7 @@
 <body>
   <h2>FC Test Host</h2>
   <div>Status: <span id="status" class="waiting">WAITING</span></div>
+  <div>Wallet: <span id="wallet-status">initializing...</span></div>
   <div id="event-log"></div>
   <iframe id="miniapp-frame" src="about:blank"></iframe>
 
@@ -60,12 +65,39 @@
     const params = new URLSearchParams(window.location.search)
     const appUrl = params.get('url') || 'http://localhost:3000'
     const fixtureName = params.get('fixture') || 'launcher'
+    const walletMode = params.get('wallet') || 'connected'
+    const initialChainId = parseInt(params.get('chain') || '10', 10)
 
     const statusEl = document.getElementById('status')
+    const walletStatusEl = document.getElementById('wallet-status')
     const logEl = document.getElementById('event-log')
     const frame = document.getElementById('miniapp-frame')
 
-    // Load fixture from query param name
+    // ── Mock Wallet State ──────────────────────────────────────────────
+    const wallet = {
+      address: '0x1234567890abcdef1234567890abcdef12345678',
+      chainId: initialChainId,
+      connected: walletMode === 'connected',
+
+      chainIdHex() {
+        return '0x' + this.chainId.toString(16)
+      },
+
+      chainIdDecimal() {
+        return String(this.chainId)
+      },
+
+      updateUI() {
+        if (this.connected) {
+          walletStatusEl.textContent = `${this.address.slice(0, 6)}...${this.address.slice(-4)} (chain:${this.chainId})`
+        } else {
+          walletStatusEl.textContent = 'disconnected'
+        }
+      }
+    }
+    wallet.updateUI()
+
+    // ── Context Fixtures ───────────────────────────────────────────────
     const fixtures = {
       launcher: {
         user: {
@@ -125,6 +157,27 @@
 
     const context = fixtures[fixtureName] || fixtures.launcher
 
+    // ── Capabilities ───────────────────────────────────────────────────
+    const capabilities = [
+      'wallet.getEthereumProvider',
+      'actions.ready',
+      'actions.signIn',
+      'actions.addMiniApp',
+      'actions.openUrl',
+      'actions.close',
+      'actions.setPrimaryButton',
+      'actions.viewProfile',
+      'actions.viewCast',
+      'actions.composeCast',
+      'actions.viewToken',
+      'actions.sendToken',
+      'actions.swapToken',
+      'actions.openMiniApp',
+    ]
+
+    const supportedChains = ['eip155:10', 'eip155:8453', 'eip155:1']
+
+    // ── Logging ────────────────────────────────────────────────────────
     function log(msg) {
       const line = document.createElement('div')
       line.textContent = `${new Date().toISOString().slice(11, 23)} ${msg}`
@@ -133,7 +186,120 @@
       console.log(msg)
     }
 
-    // Handle messages from the Mini App iframe
+    // ── SIWE Message Builder ───────────────────────────────────────────
+    function buildSiweMessage(options) {
+      const domain = new URL(appUrl).host
+      const uri = appUrl
+      const nonce = options.nonce || 'missing-nonce'
+      const issuedAt = new Date().toISOString()
+      const fid = context.user.fid
+
+      let msg = `${domain} wants you to sign in with your Ethereum account:\n`
+      msg += `${wallet.address}\n`
+      msg += `\n`
+      msg += `Farcaster Auth\n`
+      msg += `\n`
+      msg += `URI: ${uri}\n`
+      msg += `Version: 1\n`
+      msg += `Chain ID: ${wallet.chainId}\n`
+      msg += `Nonce: ${nonce}\n`
+      msg += `Issued At: ${issuedAt}`
+      if (options.notBefore) msg += `\nNot Before: ${options.notBefore}`
+      if (options.expirationTime) msg += `\nExpiration Time: ${options.expirationTime}`
+      msg += `\nResources:\n- farcaster://fid/${fid}`
+      return msg
+    }
+
+    // ── ethProvider RPC Handler ────────────────────────────────────────
+    function handleEthRpc(rpcRequest) {
+      const method = rpcRequest.method
+      const rpcParams = rpcRequest.params || []
+
+      switch (method) {
+        case 'eth_requestAccounts':
+          if (!wallet.connected) {
+            return { error: { code: 4001, message: 'User rejected the request' } }
+          }
+          wallet.connected = true
+          wallet.updateUI()
+          return { result: [wallet.address] }
+
+        case 'eth_accounts':
+          return { result: wallet.connected ? [wallet.address] : [] }
+
+        case 'eth_chainId':
+          return { result: wallet.chainIdHex() }
+
+        case 'net_version':
+          return { result: wallet.chainIdDecimal() }
+
+        case 'personal_sign': {
+          if (!wallet.connected) {
+            return { error: { code: 4100, message: 'Unauthorized' } }
+          }
+          const msgParam = rpcParams[0] || ''
+          // Deterministic mock: hash first 16 chars of the message
+          const shortMsg = typeof msgParam === 'string' ? msgParam.slice(0, 16) : ''
+          return { result: '0xmock_personal_sign_' + shortMsg.replace(/[^a-zA-Z0-9]/g, '') }
+        }
+
+        case 'eth_signTypedData_v4': {
+          if (!wallet.connected) {
+            return { error: { code: 4100, message: 'Unauthorized' } }
+          }
+          const typedData = rpcParams[1] || ''
+          const dataStr = typeof typedData === 'string' ? typedData : JSON.stringify(typedData)
+          const shortHash = dataStr.slice(0, 16).replace(/[^a-zA-Z0-9]/g, '')
+          return { result: '0xmock_typed_sign_' + shortHash }
+        }
+
+        case 'eth_sendTransaction': {
+          if (!wallet.connected) {
+            return { error: { code: 4100, message: 'Unauthorized' } }
+          }
+          // Deterministic: use a fixed mock tx hash
+          return { result: '0xmock_tx_' + '0'.repeat(54) + 'abcdef01' }
+        }
+
+        case 'wallet_switchEthereumChain': {
+          const chainParam = rpcParams[0]
+          if (chainParam && chainParam.chainId) {
+            const newChainId = parseInt(chainParam.chainId, 16)
+            wallet.chainId = newChainId
+            wallet.updateUI()
+            log(`Wallet: chain switched to ${newChainId} (${chainParam.chainId})`)
+            // Emit chainChanged event to the iframe
+            frame.contentWindow.postMessage({
+              type: 'frameEthProviderEvent',
+              event: 'chainChanged',
+              params: [chainParam.chainId]
+            }, '*')
+          }
+          return { result: null }
+        }
+
+        case 'eth_blockNumber':
+          return { result: '0x1234567' }
+
+        case 'eth_getBalance':
+          return { result: '0xde0b6b3a7640000' } // 1 ETH
+
+        case 'eth_call':
+          return { result: '0x' }
+
+        case 'eth_estimateGas':
+          return { result: '0x5208' } // 21000
+
+        case 'eth_gasPrice':
+          return { result: '0x3b9aca00' } // 1 gwei
+
+        default:
+          log(`Wallet: unsupported method ${method}`)
+          return { error: { code: 4200, message: `Unsupported method: ${method}` } }
+      }
+    }
+
+    // ── Message Handler ────────────────────────────────────────────────
     window.addEventListener('message', (event) => {
       if (event.source !== frame.contentWindow) return
       console.log('RAW MESSAGE:', JSON.stringify(event.data))
@@ -141,6 +307,7 @@
       const { id, type, path, argumentList } = event.data || {}
       const pathKey = (path || []).join('.')
 
+      // GET context
       if (pathKey === 'context') {
         log(`← APP: GET context`)
         console.log('SENDING CONTEXT:', JSON.stringify(context))
@@ -152,6 +319,7 @@
       if (type === 'APPLY') {
         log(`← APP: APPLY ${pathKey}`)
 
+        // ── ready ──
         if (pathKey === 'ready') {
           frame.contentWindow.postMessage({ id, type: 'RAW', value: null }, '*')
           statusEl.textContent = 'READY'
@@ -160,21 +328,98 @@
           return
         }
 
-        if (pathKey === 'addMiniApp') {
-          frame.contentWindow.postMessage({ id, type: 'RAW', value: { added: true } }, '*')
+        // ── addMiniApp / addFrame ──
+        if (pathKey === 'addMiniApp' || pathKey === 'addFrame') {
+          frame.contentWindow.postMessage({
+            id, type: 'RAW',
+            value: { result: { added: true, notificationDetails: { url: 'https://api.farcaster.xyz/v1/frame-notifications', token: 'mock-notif-token' } } }
+          }, '*')
           log('→ HOST: addMiniApp approved')
           return
         }
 
+        // ── signIn (SWIF) ──
         if (pathKey === 'signIn') {
+          const options = (argumentList && argumentList[0]?.value) || {}
+          const siweMessage = buildSiweMessage(options)
           frame.contentWindow.postMessage({
             id, type: 'RAW',
-            value: { message: 'mock-siwf-message', signature: '0xmocksignature123' }
+            value: {
+              result: {
+                message: siweMessage,
+                signature: '0xmock_signature_' + (options.nonce || 'nononce'),
+                authMethod: 'custody'
+              }
+            }
           }, '*')
-          log('→ HOST: signIn mock')
+          log(`→ HOST: signIn SIWE (nonce: ${options.nonce || 'none'})`)
           return
         }
 
+        // ── getCapabilities ──
+        if (pathKey === 'getCapabilities') {
+          frame.contentWindow.postMessage({ id, type: 'RAW', value: capabilities }, '*')
+          log('→ HOST: getCapabilities')
+          return
+        }
+
+        // ── getChains ──
+        if (pathKey === 'getChains') {
+          frame.contentWindow.postMessage({ id, type: 'RAW', value: supportedChains }, '*')
+          log('→ HOST: getChains')
+          return
+        }
+
+        // ── ethProviderRequestV2 (JSON-RPC 2.0) ──
+        if (pathKey === 'ethProviderRequestV2') {
+          const rpcRequest = (argumentList && argumentList[0]?.value) || {}
+          const rpcResult = handleEthRpc(rpcRequest)
+          const rpcResponse = { jsonrpc: '2.0', id: rpcRequest.id }
+          if (rpcResult.error) {
+            rpcResponse.error = rpcResult.error
+          } else {
+            rpcResponse.result = rpcResult.result
+          }
+          frame.contentWindow.postMessage({ id, type: 'RAW', value: rpcResponse }, '*')
+          log(`→ HOST: ethRPC ${rpcRequest.method} → ${rpcResult.error ? 'error' : 'ok'}`)
+          return
+        }
+
+        // ── ethProviderRequest (V1 fallback) ──
+        if (pathKey === 'ethProviderRequest') {
+          const rpcRequest = (argumentList && argumentList[0]?.value) || {}
+          const rpcResult = handleEthRpc(rpcRequest)
+          if (rpcResult.error) {
+            // V1 doesn't have a standard error envelope; return null
+            frame.contentWindow.postMessage({ id, type: 'RAW', value: null }, '*')
+          } else {
+            frame.contentWindow.postMessage({ id, type: 'RAW', value: rpcResult.result }, '*')
+          }
+          log(`→ HOST: ethRPC-v1 ${rpcRequest.method}`)
+          return
+        }
+
+        // ── eip6963RequestProvider ──
+        if (pathKey === 'eip6963RequestProvider') {
+          // Send the announce event to the iframe
+          frame.contentWindow.postMessage({
+            type: 'frameEvent',
+            event: {
+              event: 'eip6963:announceProvider',
+              info: {
+                icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" fill="%237c3aed" rx="6"/><text x="16" y="22" text-anchor="middle" fill="white" font-size="16">T</text></svg>',
+                name: 'FC Test Host Wallet',
+                rdns: 'xyz.farcaster.testhost',
+                uuid: 'fc-test-host-wallet-001'
+              }
+            }
+          }, '*')
+          frame.contentWindow.postMessage({ id, type: 'RAW', value: undefined }, '*')
+          log('→ HOST: eip6963 announce')
+          return
+        }
+
+        // ── catch-all ──
         frame.contentWindow.postMessage({ id, type: 'RAW', value: null }, '*')
         log(`→ HOST: APPLY ${pathKey} acknowledged`)
         return
@@ -183,8 +428,9 @@
       log(`← APP: unhandled ${JSON.stringify(event.data).slice(0, 80)}`)
     })
 
-    // Load the Mini App into the iframe
+    // ── Load Mini App ──────────────────────────────────────────────────
     log(`Loading app: ${appUrl}`)
+    log(`Fixture: ${fixtureName} | Wallet: ${walletMode} | Chain: ${initialChainId}`)
     frame.src = appUrl
 
     frame.addEventListener('load', () => {

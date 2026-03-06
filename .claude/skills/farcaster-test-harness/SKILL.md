@@ -38,6 +38,17 @@ pnpm test
 
 ---
 
+## Host Emulator Query Parameters
+
+| Param | Values | Default | Description |
+|-------|--------|---------|-------------|
+| `url` | URL | `http://localhost:3000` | Mini app URL to load in iframe |
+| `fixture` | `launcher`, `cast_embed`, `notification` | `launcher` | Context fixture to use |
+| `wallet` | `connected`, `disconnected` | `connected` | Mock wallet connection state |
+| `chain` | `10`, `8453`, `1`, etc. | `10` | Initial chain ID (OP Mainnet default) |
+
+---
+
 ## Critical: The Comlink Wire Protocol
 
 The Farcaster Mini App SDK (`@farcaster/miniapp-sdk`) uses **Comlink** internally for all postMessage communication. This is not documented anywhere obvious. All response values must be wrapped in Comlink's wire envelope:
@@ -125,6 +136,263 @@ The harness includes three built-in fixtures selectable via `?fixture=` query pa
 
 ---
 
+## SWIF (Sign In With Farcaster)
+
+The host emulator supports `sdk.actions.signIn()` with proper SIWE (Sign-In With Ethereum) message generation.
+
+### signIn Wire Protocol
+
+**App → Host:**
+```json
+{
+  "id": "<correlation-id>",
+  "type": "APPLY",
+  "path": ["signIn"],
+  "argumentList": [{
+    "type": "RAW",
+    "value": {
+      "nonce": "random-nonce-string",
+      "acceptAuthAddress": true,
+      "notBefore": "2024-01-01T00:00:00Z",
+      "expirationTime": "2024-12-31T23:59:59Z"
+    }
+  }]
+}
+```
+
+**Host → App (success):**
+```json
+{
+  "id": "<same-id>",
+  "type": "RAW",
+  "value": {
+    "result": {
+      "message": "<SIWE message string>",
+      "signature": "0xmock_signature_<nonce>",
+      "authMethod": "custody"
+    }
+  }
+}
+```
+
+**CRITICAL:** The response uses `{ result: { ... } }` wrapper, NOT bare `{ message, signature }`. The SDK unwraps via `response.result`. Without the wrapper, `sdk.actions.signIn()` throws.
+
+### SIWE Message Format
+
+The mock host generates a standards-compliant SIWE message:
+```
+localhost wants you to sign in with your Ethereum account:
+0x1234567890abcdef1234567890abcdef12345678
+
+Farcaster Auth
+
+URI: http://localhost:3000
+Version: 1
+Chain ID: 10
+Nonce: <from options.nonce>
+Issued At: <ISO 8601 datetime>
+Resources:
+- farcaster://fid/<fixture.user.fid>
+```
+
+### Mock signIn Values
+
+| Field | Value |
+|-------|-------|
+| `signature` | `'0xmock_signature_' + nonce` (deterministic) |
+| `authMethod` | `'custody'` |
+| `address` in SIWE | `'0x1234567890abcdef1234567890abcdef12345678'` |
+
+### App-Side signIn Pattern
+
+```typescript
+import { sdk } from '@farcaster/miniapp-sdk'
+
+const result = await sdk.actions.signIn({ nonce: crypto.randomUUID() })
+// result.message  — SIWE message string
+// result.signature — hex signature
+// result.authMethod — 'custody' | 'authAddress'
+
+// Parse the SIWE message to extract FID from resources
+const fidLine = result.message.split('\n').find(l => l.includes('farcaster://fid/'))
+const fid = fidLine?.match(/farcaster:\/\/fid\/(\d+)/)?.[1]
+```
+
+---
+
+## Wallet / ethProvider
+
+The host emulator provides a mock EIP-1193 Ethereum provider via the comlink protocol. Configure with `?wallet=connected|disconnected` and `?chain=<id>`.
+
+### ethProviderRequestV2 Wire Protocol (preferred)
+
+**App → Host:**
+```json
+{
+  "id": "<comlink-id>",
+  "type": "APPLY",
+  "path": ["ethProviderRequestV2"],
+  "argumentList": [{
+    "type": "RAW",
+    "value": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "eth_requestAccounts",
+      "params": []
+    }
+  }]
+}
+```
+
+**Host → App (success):**
+```json
+{
+  "id": "<same-comlink-id>",
+  "type": "RAW",
+  "value": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": ["0x1234567890abcdef1234567890abcdef12345678"]
+  }
+}
+```
+
+**Host → App (error):**
+```json
+{
+  "id": "<same-comlink-id>",
+  "type": "RAW",
+  "value": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": { "code": 4001, "message": "User rejected the request" }
+  }
+}
+```
+
+### ethProviderRequest Wire Protocol (V1 fallback)
+
+Same request format but path is `ethProviderRequest`. Response is raw result without JSON-RPC envelope:
+```json
+{ "id": "<same-comlink-id>", "type": "RAW", "value": ["0x1234..."] }
+```
+
+### Supported RPC Methods
+
+| Method | Mock Response | Notes |
+|--------|--------------|-------|
+| `eth_requestAccounts` | `['0x1234...5678']` | Error 4001 if `?wallet=disconnected` |
+| `eth_accounts` | `['0x1234...5678']` or `[]` | Empty if disconnected |
+| `eth_chainId` | `'0xa'` | Hex of configured chain (default OP=10) |
+| `net_version` | `'10'` | Decimal chain ID |
+| `personal_sign` | `'0xmock_personal_sign_...'` | Deterministic from message |
+| `eth_signTypedData_v4` | `'0xmock_typed_sign_...'` | Deterministic from data |
+| `eth_sendTransaction` | `'0xmock_tx_00...abcdef01'` | Fixed mock tx hash |
+| `wallet_switchEthereumChain` | `null` | Updates internal chain, emits chainChanged |
+| `eth_blockNumber` | `'0x1234567'` | Fixed block number |
+| `eth_getBalance` | `'0xde0b6b3a7640000'` | 1 ETH in wei |
+| `eth_call` | `'0x'` | Empty return |
+| `eth_estimateGas` | `'0x5208'` | 21000 gas |
+| `eth_gasPrice` | `'0x3b9aca00'` | 1 gwei |
+
+### EIP-1193 Error Codes
+
+| Code | Meaning |
+|------|---------|
+| 4001 | User rejected request |
+| 4100 | Unauthorized (not connected) |
+| 4200 | Unsupported method |
+| 4900 | Disconnected |
+| 4901 | Chain disconnected |
+
+### Provider Events
+
+The host emits provider events to the iframe via postMessage (outside comlink):
+
+```javascript
+// chainChanged — emitted automatically on wallet_switchEthereumChain
+frame.contentWindow.postMessage({
+  type: 'frameEthProviderEvent',
+  event: 'chainChanged',
+  params: ['0x2105']  // hex chain ID
+}, '*')
+
+// accountsChanged
+frame.contentWindow.postMessage({
+  type: 'frameEthProviderEvent',
+  event: 'accountsChanged',
+  params: [['0x1234...']]
+}, '*')
+```
+
+### App-Side Wallet Pattern
+
+```typescript
+import { sdk } from '@farcaster/miniapp-sdk'
+
+// Get provider (recommended — checks capabilities first)
+const provider = await sdk.wallet.getEthereumProvider()
+if (!provider) {
+  console.log('No wallet available')
+  return
+}
+
+// Or access directly (always available, may fail at runtime)
+const provider = sdk.wallet.ethProvider
+
+// Request accounts
+const accounts = await provider.request({ method: 'eth_requestAccounts' })
+
+// Get chain
+const chainId = await provider.request({ method: 'eth_chainId' })
+
+// Sign a message
+const signature = await provider.request({
+  method: 'personal_sign',
+  params: ['0x48656c6c6f', accounts[0]]
+})
+
+// Send transaction
+const txHash = await provider.request({
+  method: 'eth_sendTransaction',
+  params: [{ to: '0x...', value: '0x1' }]
+})
+
+// Switch chain
+await provider.request({
+  method: 'wallet_switchEthereumChain',
+  params: [{ chainId: '0x2105' }]  // Base
+})
+```
+
+---
+
+## getCapabilities / getChains
+
+### getCapabilities
+
+Returns the list of supported host capabilities. The SDK uses this to determine feature availability (e.g. `getEthereumProvider()` returns `undefined` if `wallet.getEthereumProvider` is not listed).
+
+```json
+// Request
+{ "id": "...", "type": "APPLY", "path": ["getCapabilities"], "argumentList": [] }
+// Response
+{ "id": "...", "type": "RAW", "value": ["wallet.getEthereumProvider", "actions.ready", "actions.signIn", ...] }
+```
+
+### getChains
+
+Returns CAIP-2 chain identifiers for supported chains.
+
+```json
+// Request
+{ "id": "...", "type": "APPLY", "path": ["getChains"], "argumentList": [] }
+// Response
+{ "id": "...", "type": "RAW", "value": ["eip155:10", "eip155:8453", "eip155:1"] }
+```
+
+---
+
 ## Host Emulator Message Handler
 
 The core message listener in `host.html`. Use this exact pattern — do not improvise the protocol:
@@ -136,7 +404,7 @@ window.addEventListener('message', (event) => {
   const { id, type, path, argumentList } = event.data || {}
   const pathKey = (path || []).join('.')
 
-  // GET context — the SDK sends { type: 'GET', path: ['context'] }
+  // GET context
   if (pathKey === 'context') {
     frame.contentWindow.postMessage({ id, type: 'RAW', value: context }, '*')
     return
@@ -150,20 +418,60 @@ window.addEventListener('message', (event) => {
       return
     }
 
-    if (pathKey === 'addMiniApp') {
-      frame.contentWindow.postMessage({ id, type: 'RAW', value: { added: true } }, '*')
-      return
-    }
-
-    if (pathKey === 'signIn') {
+    if (pathKey === 'addMiniApp' || pathKey === 'addFrame') {
       frame.contentWindow.postMessage({
         id, type: 'RAW',
-        value: { message: 'mock-siwf-message', signature: '0xmocksignature123' }
+        value: { result: { added: true, notificationDetails: { url: '...', token: '...' } } }
       }, '*')
       return
     }
 
-    // catch-all for unknown APPLY paths
+    if (pathKey === 'signIn') {
+      const options = (argumentList && argumentList[0]?.value) || {}
+      frame.contentWindow.postMessage({
+        id, type: 'RAW',
+        value: {
+          result: {                        // ← MUST wrap in { result: ... }
+            message: buildSiweMessage(options),
+            signature: '0xmock_signature_' + options.nonce,
+            authMethod: 'custody'
+          }
+        }
+      }, '*')
+      return
+    }
+
+    if (pathKey === 'getCapabilities') {
+      frame.contentWindow.postMessage({ id, type: 'RAW', value: capabilities }, '*')
+      return
+    }
+
+    if (pathKey === 'getChains') {
+      frame.contentWindow.postMessage({ id, type: 'RAW', value: supportedChains }, '*')
+      return
+    }
+
+    if (pathKey === 'ethProviderRequestV2') {
+      const rpcRequest = (argumentList && argumentList[0]?.value) || {}
+      const rpcResult = handleEthRpc(rpcRequest)
+      const rpcResponse = { jsonrpc: '2.0', id: rpcRequest.id }
+      if (rpcResult.error) rpcResponse.error = rpcResult.error
+      else rpcResponse.result = rpcResult.result
+      frame.contentWindow.postMessage({ id, type: 'RAW', value: rpcResponse }, '*')
+      return
+    }
+
+    if (pathKey === 'ethProviderRequest') {
+      const rpcRequest = (argumentList && argumentList[0]?.value) || {}
+      const rpcResult = handleEthRpc(rpcRequest)
+      frame.contentWindow.postMessage({
+        id, type: 'RAW',
+        value: rpcResult.error ? null : rpcResult.result
+      }, '*')
+      return
+    }
+
+    // catch-all
     frame.contentWindow.postMessage({ id, type: 'RAW', value: null }, '*')
     return
   }
@@ -172,24 +480,45 @@ window.addEventListener('message', (event) => {
 
 ---
 
-## Playwright Test Pattern
+## Playwright Test Patterns
 
-Standard test asserting full SDK handshake and FID display:
+### Basic SDK Handshake
 
 ```typescript
 import { test, expect } from '@playwright/test'
 
 test('mini app receives FC context and calls ready', async ({ page }) => {
   page.on('console', msg => console.log('HOST:', msg.text()))
-
-  await page.goto('http://localhost:4000/host.html?url=http://localhost:3000&fixture=launcher')
-
-  // Assert SDK handshake completes
+  await page.goto('http://localhost:4000/host?url=http://localhost:3000&fixture=launcher')
   await expect(page.locator('#status')).toHaveText('READY', { timeout: 10000 })
-
-  // Assert FID rendered in app iframe
   const appFrame = page.frameLocator('iframe#miniapp-frame')
   await expect(appFrame.locator('[data-testid="fid-display"]')).toHaveText('fid:3621', { timeout: 5000 })
+})
+```
+
+### Wallet Test (using injectApp)
+
+```typescript
+test('wallet returns accounts', async ({ page }) => {
+  await page.goto('http://localhost:4000/host?url=about:blank&fixture=launcher')
+  await injectApp(page, `
+    const reqId = 'test-' + Math.random().toString(16).slice(2)
+    window.parent.postMessage({
+      id: reqId, type: 'APPLY', path: ['ethProviderRequestV2'],
+      argumentList: [{ type: 'RAW', value: {
+        jsonrpc: '2.0', id: 1, method: 'eth_requestAccounts', params: []
+      }}]
+    }, '*')
+    window.addEventListener('message', (e) => {
+      if (e.data.id === reqId && e.data.type === 'RAW') {
+        document.getElementById('result').textContent = e.data.value.result[0]
+      }
+    })
+  `)
+  const appFrame = page.frameLocator('#miniapp-frame')
+  await expect(appFrame.locator('#result')).toHaveText(
+    '0x1234567890abcdef1234567890abcdef12345678', { timeout: 5000 }
+  )
 })
 ```
 
@@ -238,7 +567,13 @@ When building Mini Apps with Ralph, include these stories:
 > Clone `https://github.com/creativelayer/farcaster-test-harness` as a sibling directory to the app. Install dependencies with `pnpm install`. The harness serves on port 4000 via `pnpm serve`. Do not reimplement the host — use the repo as-is.
 
 **US-xxx — Playwright Integration Test:**
-> Write a Playwright test in the harness `tests/` directory. Load `http://localhost:4000/host.html?url=http://localhost:3000&fixture=launcher`. Assert `#status` becomes `READY`. Assert `[data-testid="fid-display"]` in the app iframe shows `fid:3621`. Run from the harness directory with `pnpm test`.
+> Write a Playwright test in the harness `tests/` directory. Load `http://localhost:4000/host?url=http://localhost:3000&fixture=launcher`. Assert `#status` becomes `READY`. Assert `[data-testid="fid-display"]` in the app iframe shows `fid:3621`. Run from the harness directory with `pnpm test`.
+
+**US-xxx — SWIF Authentication:**
+> Implement Sign In With Farcaster using `sdk.actions.signIn({ nonce })`. The test harness generates a valid SIWE message with the fixture's FID and returns a deterministic signature `0xmock_signature_<nonce>`. Write a Playwright test asserting the SIWE message contains the correct nonce and FID.
+
+**US-xxx — Wallet Integration:**
+> Use `sdk.wallet.ethProvider` for on-chain interactions. The test harness mocks `eth_requestAccounts`, `eth_chainId`, `personal_sign`, `eth_sendTransaction`, and `wallet_switchEthereumChain`. Write Playwright tests asserting mock address `0x1234567890abcdef1234567890abcdef12345678` and chain ID `0xa` (OP Mainnet). Use `?wallet=disconnected` to test rejection flows.
 
 ---
 
@@ -252,4 +587,10 @@ When building Mini Apps with Ralph, include these stories:
 
 **iframe content not accessible in Playwright** — Use `page.frameLocator('iframe#miniapp-frame')` not `page.frames()`. The iframe must have the `id` attribute set in `host.html`.
 
-**`serve` redirects .html URLs** — The `serve` package does clean URL redirects (`host.html` → `host`). Both work; Playwright follows redirects automatically.
+**`serve` redirects .html URLs and DROPS query params** — The `serve` package redirects `host.html` → `host` (301). This redirect **strips query parameters**. Always use `/host?url=...` (no `.html`) in test URLs to preserve params like `?wallet=disconnected&chain=8453`.
+
+**`signIn` returns undefined** — The response must use `{ result: { message, signature, authMethod } }` wrapper. The old format `{ message, signature }` without the `result` wrapper causes `response.result` to be `undefined` in the SDK.
+
+**Wallet methods fail silently** — Check that the comlink path is `ethProviderRequestV2` (not `ethProviderRequest`). The SDK tries V2 first and falls back to V1 only on specific errors.
+
+**`getEthereumProvider()` returns undefined** — The host must handle `getCapabilities` and return `['wallet.getEthereumProvider', ...]`. Without this, the SDK assumes the wallet is not available.

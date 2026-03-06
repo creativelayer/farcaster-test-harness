@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test'
 async function injectApp(page: any, script: string) {
   // Wait for iframe element to exist
   const frame = page.frameLocator('#miniapp-frame')
-  
+
   // Write a minimal app into the iframe via srcdoc attribute instead
   // This avoids the contentDocument timing issue entirely
   await page.evaluate((scriptContent: string) => {
@@ -12,6 +12,7 @@ async function injectApp(page: any, script: string) {
       <html><body>
         <div id="fid-display">loading...</div>
         <div id="fixture-type">loading...</div>
+        <div id="result">waiting...</div>
         <script>
           ${scriptContent}
         <\/script>
@@ -20,8 +21,10 @@ async function injectApp(page: any, script: string) {
   }, script)
 }
 
+// ── Existing Tests ─────────────────────────────────────────────────────
+
 test('host emulator responds to getContext and receives ready', async ({ page }) => {
-  await page.goto('http://localhost:4000/host.html?url=about:blank&fixture=launcher')
+  await page.goto('http://localhost:4000/host?url=about:blank&fixture=launcher')
   await page.waitForSelector('#status')
 
   await injectApp(page, `
@@ -40,7 +43,7 @@ test('host emulator responds to getContext and receives ready', async ({ page })
 })
 
 test('host emulator provides correct context for launcher fixture', async ({ page }) => {
-  await page.goto('http://localhost:4000/host.html?url=about:blank&fixture=launcher')
+  await page.goto('http://localhost:4000/host?url=about:blank&fixture=launcher')
 
   await injectApp(page, `
     const contextId = 'test-ctx-' + Math.random().toString(16).slice(2)
@@ -58,7 +61,7 @@ test('host emulator provides correct context for launcher fixture', async ({ pag
 })
 
 test('host emulator switches fixture via query param', async ({ page }) => {
-  await page.goto('http://localhost:4000/host.html?url=about:blank&fixture=notification')
+  await page.goto('http://localhost:4000/host?url=about:blank&fixture=notification')
 
   await injectApp(page, `
     const contextId = 'test-ctx-' + Math.random().toString(16).slice(2)
@@ -75,11 +78,10 @@ test('host emulator switches fixture via query param', async ({ page }) => {
   await expect(page.locator('#status')).toHaveText('READY', { timeout: 5000 })
 })
 
-
 test('real mini app receives FC context and calls ready', async ({ page }) => {
   page.on('console', msg => console.log('HOST CONSOLE:', msg.text()))
 
-  await page.goto('http://localhost:4000/host.html?url=http://localhost:3000&fixture=launcher')
+  await page.goto('http://localhost:4000/host?url=http://localhost:3000&fixture=launcher')
   await page.waitForTimeout(5000)
 
   await expect(page.locator('#status')).toHaveText('READY', { timeout: 10000 })
@@ -87,4 +89,328 @@ test('real mini app receives FC context and calls ready', async ({ page }) => {
   // Assert FID is displayed inside the iframe
   const appFrame = page.frameLocator('iframe#miniapp-frame')
   await expect(appFrame.locator('[data-testid="fid-display"]')).toHaveText('fid:3621', { timeout: 5000 })
+})
+
+// ── SWIF (Sign In With Farcaster) Tests ────────────────────────────────
+
+test('signIn returns proper SIWE message with result wrapper', async ({ page }) => {
+  await page.goto('http://localhost:4000/host?url=about:blank&fixture=launcher')
+
+  await injectApp(page, `
+    const signInId = 'test-signin-' + Math.random().toString(16).slice(2)
+    window.parent.postMessage({
+      id: signInId,
+      type: 'APPLY',
+      path: ['signIn'],
+      argumentList: [{ type: 'RAW', value: { nonce: 'test-nonce-abc123', acceptAuthAddress: true } }]
+    }, '*')
+    window.addEventListener('message', (e) => {
+      if (e.data.id === signInId && e.data.type === 'RAW') {
+        const v = e.data.value
+        const parts = []
+        // Check result wrapper exists
+        if (v.result) parts.push('has-result')
+        if (v.result?.authMethod === 'custody') parts.push('custody')
+        if (v.result?.signature === '0xmock_signature_test-nonce-abc123') parts.push('sig-ok')
+        if (v.result?.message?.includes('Farcaster Auth')) parts.push('siwe-ok')
+        if (v.result?.message?.includes('Nonce: test-nonce-abc123')) parts.push('nonce-ok')
+        if (v.result?.message?.includes('farcaster://fid/3621')) parts.push('fid-ok')
+        document.getElementById('result').textContent = parts.join(',')
+      }
+    })
+  `)
+
+  const appFrame = page.frameLocator('#miniapp-frame')
+  await expect(appFrame.locator('#result')).toHaveText(
+    'has-result,custody,sig-ok,siwe-ok,nonce-ok,fid-ok',
+    { timeout: 5000 }
+  )
+})
+
+// ── getCapabilities / getChains Tests ──────────────────────────────────
+
+test('getCapabilities returns supported capabilities', async ({ page }) => {
+  await page.goto('http://localhost:4000/host?url=about:blank&fixture=launcher')
+
+  await injectApp(page, `
+    const capsId = 'test-caps-' + Math.random().toString(16).slice(2)
+    window.parent.postMessage({
+      id: capsId,
+      type: 'APPLY',
+      path: ['getCapabilities'],
+      argumentList: []
+    }, '*')
+    window.addEventListener('message', (e) => {
+      if (e.data.id === capsId && e.data.type === 'RAW') {
+        const caps = e.data.value
+        const parts = []
+        if (Array.isArray(caps)) parts.push('is-array')
+        if (caps.includes('wallet.getEthereumProvider')) parts.push('has-eth')
+        if (caps.includes('actions.signIn')) parts.push('has-signin')
+        if (caps.includes('actions.ready')) parts.push('has-ready')
+        document.getElementById('result').textContent = parts.join(',')
+      }
+    })
+  `)
+
+  const appFrame = page.frameLocator('#miniapp-frame')
+  await expect(appFrame.locator('#result')).toHaveText(
+    'is-array,has-eth,has-signin,has-ready',
+    { timeout: 5000 }
+  )
+})
+
+test('getChains returns CAIP-2 chain identifiers', async ({ page }) => {
+  await page.goto('http://localhost:4000/host?url=about:blank&fixture=launcher')
+
+  await injectApp(page, `
+    const chainsId = 'test-chains-' + Math.random().toString(16).slice(2)
+    window.parent.postMessage({
+      id: chainsId,
+      type: 'APPLY',
+      path: ['getChains'],
+      argumentList: []
+    }, '*')
+    window.addEventListener('message', (e) => {
+      if (e.data.id === chainsId && e.data.type === 'RAW') {
+        const chains = e.data.value
+        const parts = []
+        if (Array.isArray(chains)) parts.push('is-array')
+        if (chains.includes('eip155:10')) parts.push('has-op')
+        if (chains.includes('eip155:8453')) parts.push('has-base')
+        document.getElementById('result').textContent = parts.join(',')
+      }
+    })
+  `)
+
+  const appFrame = page.frameLocator('#miniapp-frame')
+  await expect(appFrame.locator('#result')).toHaveText(
+    'is-array,has-op,has-base',
+    { timeout: 5000 }
+  )
+})
+
+// ── Wallet / ethProvider Tests ─────────────────────────────────────────
+
+test('ethProviderRequestV2 returns accounts and chainId', async ({ page }) => {
+  await page.goto('http://localhost:4000/host?url=about:blank&fixture=launcher')
+
+  await injectApp(page, `
+    const results = {}
+    let pending = 2
+
+    function checkDone() {
+      pending--
+      if (pending <= 0) {
+        document.getElementById('result').textContent = Object.entries(results).map(([k,v]) => k + ':' + v).join(',')
+      }
+    }
+
+    window.addEventListener('message', (e) => {
+      if (e.data.type !== 'RAW') return
+      if (e.data.id === reqAccId) {
+        const rpc = e.data.value
+        if (rpc.result && rpc.result[0] === '0x1234567890abcdef1234567890abcdef12345678') {
+          results.accounts = 'ok'
+        } else {
+          results.accounts = 'fail'
+        }
+        checkDone()
+      }
+      if (e.data.id === chainId) {
+        const rpc = e.data.value
+        if (rpc.result === '0xa') {
+          results.chain = 'ok'
+        } else {
+          results.chain = 'fail:' + rpc.result
+        }
+        checkDone()
+      }
+    })
+
+    const reqAccId = 'test-acc-' + Math.random().toString(16).slice(2)
+    window.parent.postMessage({
+      id: reqAccId,
+      type: 'APPLY',
+      path: ['ethProviderRequestV2'],
+      argumentList: [{ type: 'RAW', value: { jsonrpc: '2.0', id: 1, method: 'eth_requestAccounts', params: [] } }]
+    }, '*')
+
+    const chainId = 'test-chain-' + Math.random().toString(16).slice(2)
+    window.parent.postMessage({
+      id: chainId,
+      type: 'APPLY',
+      path: ['ethProviderRequestV2'],
+      argumentList: [{ type: 'RAW', value: { jsonrpc: '2.0', id: 2, method: 'eth_chainId', params: [] } }]
+    }, '*')
+  `)
+
+  const appFrame = page.frameLocator('#miniapp-frame')
+  await expect(appFrame.locator('#result')).toHaveText(
+    'accounts:ok,chain:ok',
+    { timeout: 5000 }
+  )
+})
+
+test('ethProvider personal_sign returns deterministic mock signature', async ({ page }) => {
+  await page.goto('http://localhost:4000/host?url=about:blank&fixture=launcher')
+
+  await injectApp(page, `
+    const signId = 'test-psign-' + Math.random().toString(16).slice(2)
+    window.parent.postMessage({
+      id: signId,
+      type: 'APPLY',
+      path: ['ethProviderRequestV2'],
+      argumentList: [{ type: 'RAW', value: {
+        jsonrpc: '2.0', id: 1,
+        method: 'personal_sign',
+        params: ['0x48656c6c6f', '0x1234567890abcdef1234567890abcdef12345678']
+      }}]
+    }, '*')
+    window.addEventListener('message', (e) => {
+      if (e.data.id === signId && e.data.type === 'RAW') {
+        const rpc = e.data.value
+        if (rpc.result && rpc.result.startsWith('0xmock_personal_sign_')) {
+          document.getElementById('result').textContent = 'sig-ok'
+        } else {
+          document.getElementById('result').textContent = 'sig-fail:' + JSON.stringify(rpc)
+        }
+      }
+    })
+  `)
+
+  const appFrame = page.frameLocator('#miniapp-frame')
+  await expect(appFrame.locator('#result')).toHaveText('sig-ok', { timeout: 5000 })
+})
+
+test('wallet_switchEthereumChain updates chain', async ({ page }) => {
+  await page.goto('http://localhost:4000/host?url=about:blank&fixture=launcher')
+
+  await injectApp(page, `
+    let step = 0
+    window.addEventListener('message', (e) => {
+      if (e.data.type !== 'RAW') return
+      if (e.data.id === switchId) {
+        // Switch succeeded, now query chainId
+        const checkId2 = 'test-check-' + Math.random().toString(16).slice(2)
+        window.checkChainId = checkId2
+        window.parent.postMessage({
+          id: checkId2,
+          type: 'APPLY',
+          path: ['ethProviderRequestV2'],
+          argumentList: [{ type: 'RAW', value: { jsonrpc: '2.0', id: 2, method: 'eth_chainId', params: [] } }]
+        }, '*')
+      }
+      if (window.checkChainId && e.data.id === window.checkChainId) {
+        const rpc = e.data.value
+        // 0x2105 = 8453 (Base)
+        if (rpc.result === '0x2105') {
+          document.getElementById('result').textContent = 'switched-ok'
+        } else {
+          document.getElementById('result').textContent = 'switched-fail:' + rpc.result
+        }
+      }
+    })
+
+    const switchId = 'test-switch-' + Math.random().toString(16).slice(2)
+    window.parent.postMessage({
+      id: switchId,
+      type: 'APPLY',
+      path: ['ethProviderRequestV2'],
+      argumentList: [{ type: 'RAW', value: {
+        jsonrpc: '2.0', id: 1,
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: '0x2105' }]
+      }}]
+    }, '*')
+  `)
+
+  const appFrame = page.frameLocator('#miniapp-frame')
+  await expect(appFrame.locator('#result')).toHaveText('switched-ok', { timeout: 5000 })
+})
+
+test('disconnected wallet rejects eth_requestAccounts with 4001', async ({ page }) => {
+  await page.goto('http://localhost:4000/host?url=about:blank&fixture=launcher&wallet=disconnected')
+
+  await injectApp(page, `
+    const reqId = 'test-disc-' + Math.random().toString(16).slice(2)
+    window.parent.postMessage({
+      id: reqId,
+      type: 'APPLY',
+      path: ['ethProviderRequestV2'],
+      argumentList: [{ type: 'RAW', value: { jsonrpc: '2.0', id: 1, method: 'eth_requestAccounts', params: [] } }]
+    }, '*')
+    window.addEventListener('message', (e) => {
+      if (e.data.id === reqId && e.data.type === 'RAW') {
+        const rpc = e.data.value
+        if (rpc.error && rpc.error.code === 4001) {
+          document.getElementById('result').textContent = 'rejected-4001'
+        } else {
+          document.getElementById('result').textContent = 'unexpected:' + JSON.stringify(rpc)
+        }
+      }
+    })
+  `)
+
+  const appFrame = page.frameLocator('#miniapp-frame')
+  await expect(appFrame.locator('#result')).toHaveText('rejected-4001', { timeout: 5000 })
+})
+
+test('eth_sendTransaction returns mock tx hash', async ({ page }) => {
+  await page.goto('http://localhost:4000/host?url=about:blank&fixture=launcher')
+
+  await injectApp(page, `
+    const txId = 'test-tx-' + Math.random().toString(16).slice(2)
+    window.parent.postMessage({
+      id: txId,
+      type: 'APPLY',
+      path: ['ethProviderRequestV2'],
+      argumentList: [{ type: 'RAW', value: {
+        jsonrpc: '2.0', id: 1,
+        method: 'eth_sendTransaction',
+        params: [{ to: '0x0000000000000000000000000000000000000001', value: '0x1' }]
+      }}]
+    }, '*')
+    window.addEventListener('message', (e) => {
+      if (e.data.id === txId && e.data.type === 'RAW') {
+        const rpc = e.data.value
+        if (rpc.result && rpc.result.startsWith('0xmock_tx_')) {
+          document.getElementById('result').textContent = 'tx-ok'
+        } else {
+          document.getElementById('result').textContent = 'tx-fail:' + JSON.stringify(rpc)
+        }
+      }
+    })
+  `)
+
+  const appFrame = page.frameLocator('#miniapp-frame')
+  await expect(appFrame.locator('#result')).toHaveText('tx-ok', { timeout: 5000 })
+})
+
+test('chain query param configures initial chain', async ({ page }) => {
+  await page.goto('http://localhost:4000/host?url=about:blank&fixture=launcher&chain=8453')
+
+  await injectApp(page, `
+    const chainId = 'test-chain-' + Math.random().toString(16).slice(2)
+    window.parent.postMessage({
+      id: chainId,
+      type: 'APPLY',
+      path: ['ethProviderRequestV2'],
+      argumentList: [{ type: 'RAW', value: { jsonrpc: '2.0', id: 1, method: 'eth_chainId', params: [] } }]
+    }, '*')
+    window.addEventListener('message', (e) => {
+      if (e.data.id === chainId && e.data.type === 'RAW') {
+        const rpc = e.data.value
+        // 0x2105 = 8453 (Base)
+        if (rpc.result === '0x2105') {
+          document.getElementById('result').textContent = 'base-ok'
+        } else {
+          document.getElementById('result').textContent = 'base-fail:' + rpc.result
+        }
+      }
+    })
+  `)
+
+  const appFrame = page.frameLocator('#miniapp-frame')
+  await expect(appFrame.locator('#result')).toHaveText('base-ok', { timeout: 5000 })
 })
