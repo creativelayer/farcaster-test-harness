@@ -68,12 +68,36 @@ npx playwright test --headed
 | `url` | `http://localhost:3000` | URL of the mini app to load in the iframe |
 | `fixture` | `launcher` | Which context fixture to use |
 
+## Claude Code skill
+
+This repo includes a [Claude Code](https://claude.ai/claude-code) skill that teaches an agent how to use the test harness — the comlink wire protocol, fixture schemas, Playwright test patterns, and Ralph PRD integration.
+
+### Install the skill into your mini app project
+
+From your mini app project directory:
+
+```bash
+bash ../farcaster-test-harness/install-skill.sh
+```
+
+This copies `SKILL.md` into your project's `.claude/skills/farcaster-test-harness/` directory. Once installed, Claude Code will automatically use the skill when working on Farcaster Mini App testing tasks.
+
+### What the skill provides
+
+- The comlink wire protocol details (critical — not documented in the SDK)
+- Context fixture schemas with all required fields
+- Playwright test patterns for asserting SDK handshake and iframe content
+- App-side SDK integration patterns (correct `ready()` / `context` call order)
+- Ralph PRD story templates for automated Mini App builds
+
 ## Project structure
 
 ```
 host.html              # Host emulator page
 tests/host.spec.ts     # Playwright tests
 playwright.config.ts   # Playwright configuration
+SKILL.md               # Claude Code skill (install into your project)
+install-skill.sh       # Skill installer script
 ```
 
 ## License
