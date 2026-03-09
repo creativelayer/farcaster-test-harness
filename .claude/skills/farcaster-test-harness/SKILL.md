@@ -642,6 +642,98 @@ http://localhost:4000/host?url=http://localhost:3000&capabilities=no-wallet&dela
 
 ---
 
+## Quick Auth Mock Server
+
+The harness includes a mock Quick Auth server that replaces `auth.farcaster.xyz` for local testing. It implements the same endpoints the `@farcaster/quick-auth` SDK calls, issuing real RSA-signed JWTs that can be verified against the server's JWKS endpoint.
+
+### Starting the Server
+
+```bash
+# Default port 4100
+npx farcaster-test-harness-quick-auth
+
+# Custom port
+npx farcaster-test-harness-quick-auth 4200
+```
+
+The server prints `QUICK_AUTH_READY` to stdout when listening, making it compatible with Playwright's `webServer` configuration.
+
+### Endpoints
+
+**`POST /nonce`** — Generate a random nonce
+```json
+// Request: empty body
+// Response:
+{ "nonce": "550e8400-e29b-41d4-a716-446655440000" }
+```
+
+**`POST /verify-siwf`** — Verify a SIWE message and issue a JWT
+```json
+// Request:
+{ "domain": "localhost:3000", "message": "<SIWE message>", "signature": "0x..." }
+// Response:
+{ "token": "eyJhbGciOiJSUzI1NiIs...", "valid": true }
+```
+
+The JWT payload contains:
+- `sub` — FID extracted from the SIWE message's `farcaster://fid/<fid>` resource
+- `address` — Ethereum address from the SIWE message
+- `iss` — Server origin (e.g. `http://localhost:4100`)
+- `aud` — Domain from the request
+- `iat`, `exp` — Issued at and expiration (1 hour)
+
+**`GET /.well-known/jwks.json`** — Public key for JWT verification
+```json
+{ "keys": [{ "kty": "RSA", "alg": "RS256", "use": "sig", "kid": "...", "n": "...", "e": "AQAB" }] }
+```
+
+### Configuring Mini Apps
+
+**Frontend (SDK):** Pass `quickAuthServerOrigin` when calling `sdk.quickAuth.getToken()`:
+```typescript
+const { token } = await sdk.quickAuth.getToken({
+  quickAuthServerOrigin: 'http://localhost:4100'
+})
+```
+
+**Backend (JWT verification):** Point `createClient` at the mock server:
+```typescript
+import { createClient } from '@farcaster/quick-auth'
+const client = createClient({ origin: 'http://localhost:4100' })
+const payload = await client.verifyJwt({ token, domain: 'localhost:3000' })
+// payload.sub === '3621' (FID from harness fixture)
+```
+
+### Playwright Configuration
+
+Add the Quick Auth server alongside the host server:
+
+```typescript
+import { defineConfig } from '@playwright/test'
+
+export default defineConfig({
+  webServer: [
+    {
+      command: 'npx farcaster-test-harness-serve 4000',
+      port: 4000,
+      reuseExistingServer: true,
+    },
+    {
+      command: 'npx farcaster-test-harness-quick-auth 4100',
+      port: 4100,
+      reuseExistingServer: true,
+    },
+  ],
+})
+```
+
+### Ralph PRD Story Template
+
+**US-xxx — Quick Auth Integration:**
+> Migrate from manual SWIF (raw signIn + custom nonce/verify endpoints) to Quick Auth. Use `sdk.quickAuth.getToken({ quickAuthServerOrigin })` on the frontend. On the backend, use `createClient({ origin }).verifyJwt({ token, domain })` to verify JWTs. Remove custom nonce store and SIWE verification endpoints. Configure `quickAuthServerOrigin` via environment variable (`NEXT_PUBLIC_QUICK_AUTH_ORIGIN`), defaulting to `https://auth.farcaster.xyz` in production and `http://localhost:4100` in development/test.
+
+---
+
 ## Troubleshooting
 
 **`sdk.context` resolves to null** — Response is missing the `{ type: "RAW", value: ... }` Comlink wrapper. Every postMessage response from host to app must use this envelope.
@@ -659,3 +751,7 @@ http://localhost:4000/host?url=http://localhost:3000&capabilities=no-wallet&dela
 **Wallet methods fail silently** — Check that the comlink path is `ethProviderRequestV2` (not `ethProviderRequest`). The SDK tries V2 first and falls back to V1 only on specific errors.
 
 **`getEthereumProvider()` returns undefined** — The host must handle `getCapabilities` and return `['wallet.getEthereumProvider', ...]`. Without this, the SDK assumes the wallet is not available.
+
+**JWT `verifyJwt` fails with audience mismatch behind a proxy/tunnel** — When running behind a reverse proxy (e.g., ngrok, remx.xyz), `new URL(request.url).host` returns `localhost:3000` but the JWT's `aud` claim is the tunnel domain. Use `request.headers.get('x-forwarded-host') || new URL(request.url).host` to get the correct domain for verification.
+
+**`eth_sendTransaction` not populating wallet UI in Farcaster** — Always include `from` in the transaction params. The Farcaster wallet needs `from` to properly populate the confirmation UI. Example: `{ from: address, to: recipientAddress, value: '0x38D7EA4C68000' }`.

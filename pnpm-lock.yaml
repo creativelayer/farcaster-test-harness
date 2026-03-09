@@ -7,6 +7,13 @@ settings:
 importers:
 
   .:
+    dependencies:
+      jose:
+        specifier: ^6.0.0
+        version: 6.2.0
+      serve:
+        specifier: ^14.2.6
+        version: 14.2.6
     devDependencies:
       '@playwright/test':
         specifier: ^1.58.2
@@ -14,9 +21,6 @@ importers:
       playwright:
         specifier: ^1.58.2
         version: 1.58.2
-      serve:
-        specifier: ^14.2.6
-        version: 14.2.6
 
 packages:
 
@@ -198,6 +202,9 @@ packages:
 
   isexe@2.0.0:
     resolution: {integrity: sha512-RHxMLp9lnKHGHRng9QFhRCMbYAcVpn69smSGcq3f36xjgVVWThj4qqLbTLlq7Ssj8B+fIQ1EuCEGI2lKsyQeIw==}
+
+  jose@6.2.0:
+    resolution: {integrity: sha512-xsfE1TcSCbUdo6U07tR0mvhg0flGxU8tPLbF03mirl2ukGQENhUg4ubGYQnhVH0b5stLlPM+WOqDkEl1R1y5sQ==}
 
   json-schema-traverse@1.0.0:
     resolution: {integrity: sha512-NM8/P9n3XjXhIZn1lLhkFaACTOURQXjWhV4BA/RnOv8xvgqtqpAX9IO4mRQxSx1Rlo4tqzeqb0sOlruaOy3dug==}
@@ -519,6 +526,8 @@ snapshots:
       is-docker: 2.2.1
 
   isexe@2.0.0: {}
+
+  jose@6.2.0: {}
 
   json-schema-traverse@1.0.0: {}
 
